@@ -127,6 +127,8 @@ import {
   deleteSessionReplay,
   getSessionReplayEvents,
   getSessionReplays,
+  mobileSessionReplayRouteOptions,
+  recordMobileSessionReplay,
   recordSessionReplay,
 } from "./api/sessionReplay/index.js";
 import {
@@ -542,6 +544,11 @@ async function analyticsRoutes(fastify: FastifyInstance) {
 async function sessionReplayRoutes(fastify: FastifyInstance) {
   // Session Replay
   fastify.post("/session-replay/record/:siteId", recordSessionReplay); // Public - tracking endpoint
+  fastify.post<{ Params: { siteId: string }; Body: unknown }>(
+    "/session-replay/mobile/:siteId",
+    mobileSessionReplayRouteOptions,
+    recordMobileSessionReplay
+  ); // Public - React Native tracking endpoint
   fastify.get("/sites/:siteId/session-replay/list", publicReplayRead, getSessionReplays);
   fastify.get("/sites/:siteId/session-replay/:sessionId", publicReplayRead, getSessionReplayEvents);
   fastify.delete("/sites/:siteId/session-replay/:sessionId", authReplayWrite, deleteSessionReplay);

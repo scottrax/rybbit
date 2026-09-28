@@ -311,7 +311,11 @@ describe("addSite — domain validation", () => {
     await addSite(makeRequest({ type: "mobile", domain: "com.example.app" }), reply);
 
     expect(reply.statusCode).toBe(201);
-    expect(state.insertedValues[0]).toMatchObject({ type: "mobile", domain: "com.example.app" });
+    expect(state.insertedValues[0]).toMatchObject({
+      type: "mobile",
+      domain: "com.example.app",
+      sessionReplay: false,
+    });
   });
 
   it("rejects an invalid mobile app identifier", async () => {
@@ -324,13 +328,25 @@ describe("addSite — domain validation", () => {
     expect(state.insertedValues).toHaveLength(0);
   });
 
-  it("rejects session replay and web vitals for mobile sites", async () => {
+  it("allows entitled mobile sites to persist session replay", async () => {
+    mocks.getSubscriptionInner.mockResolvedValue(
+      subscription({ planName: "pro-1m", siteLimit: null, includesReplay: true })
+    );
     const reply = replyStub();
 
     await addSite(makeRequest({ type: "mobile", domain: "com.example.app", sessionReplay: true }), reply);
 
+    expect(reply.statusCode).toBe(201);
+    expect(state.insertedValues[0]).toMatchObject({ type: "mobile", sessionReplay: true });
+  });
+
+  it("still rejects web vitals for mobile sites", async () => {
+    const reply = replyStub();
+
+    await addSite(makeRequest({ type: "mobile", domain: "com.example.app", webVitals: true }), reply);
+
     expect(reply.statusCode).toBe(400);
-    expect(reply.body.error).toBe("Session replay and Web Vitals are only available for web sites");
+    expect(reply.body.error).toBe("Web Vitals are only available for web sites");
     expect(state.insertedValues).toHaveLength(0);
   });
 });

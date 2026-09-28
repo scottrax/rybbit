@@ -177,12 +177,8 @@ function validateSiteIdentity(type: SiteType, domain: string): void {
 }
 
 function validateMobileFeatures(type: SiteType, input: Pick<CreateSiteInput, "sessionReplay" | "webVitals">): void {
-  if (type === "mobile" && (input.sessionReplay || input.webVitals)) {
-    throw new SiteLifecycleError(
-      "mobile_feature_not_supported",
-      400,
-      "Session replay and Web Vitals are only available for web sites"
-    );
+  if (type === "mobile" && input.webVitals) {
+    throw new SiteLifecycleError("mobile_feature_not_supported", 400, "Web Vitals are only available for web sites");
   }
 }
 
@@ -275,7 +271,7 @@ class SiteConfigurationLifecycle {
             blockBots: input.blockBots ?? true,
             ...(input.excludedIPs !== undefined && { excludedIPs: input.excludedIPs }),
             ...(input.excludedCountries !== undefined && { excludedCountries: input.excludedCountries }),
-            ...(input.sessionReplay !== undefined && { sessionReplay: input.sessionReplay }),
+            sessionReplay: input.sessionReplay ?? false,
             ...(input.webVitals !== undefined && { webVitals: input.webVitals }),
             ...(input.trackErrors !== undefined && { trackErrors: input.trackErrors }),
             ...(input.trackOutbound !== undefined && { trackOutbound: input.trackOutbound }),
@@ -474,7 +470,6 @@ class SiteConfigurationLifecycle {
       updateData.domain = domain;
     }
     if (nextSiteType === "mobile") {
-      updateData.sessionReplay = false;
       updateData.webVitals = false;
     }
 

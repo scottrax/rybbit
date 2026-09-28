@@ -281,6 +281,7 @@ export async function initializeCoreTables() {
         site_id UInt16,
         session_id String,
         user_id String,
+        replay_source LowCardinality(String) DEFAULT 'web',
         timestamp DateTime64(3, 'UTC'),
         event_type LowCardinality(String),
         event_data String,
@@ -305,7 +306,8 @@ export async function initializeCoreTables() {
       ALTER TABLE session_replay_events
         ADD COLUMN IF NOT EXISTS event_data_key Nullable(String), -- R2 storage key for cloud deployments
         ADD COLUMN IF NOT EXISTS batch_index Nullable(UInt16), -- Index within the R2 batch
-        ADD COLUMN IF NOT EXISTS identified_user_id String DEFAULT ''
+        ADD COLUMN IF NOT EXISTS identified_user_id String DEFAULT '',
+        ADD COLUMN IF NOT EXISTS replay_source LowCardinality(String) DEFAULT 'web'
       `
   );
   await ensureUtcTimeColumns("session_replay_events", UTC_TIME_COLUMNS.session_replay_events);
@@ -379,6 +381,7 @@ export async function initializeCoreTables() {
         site_id UInt16,
         session_id String,
         user_id SimpleAggregateFunction(anyLast, String),
+        replay_source SimpleAggregateFunction(anyLast, LowCardinality(String)),
         -- Rows arrive with '' until the visitor identifies, and max() over a
         -- String makes any real id win over the empty one.
         identified_user_id SimpleAggregateFunction(max, String),
@@ -430,6 +433,13 @@ export async function initializeCoreTables() {
       PARTITION BY toYYYYMM(start_time)
       ORDER BY (site_id, session_id)
       TTL toDateTime(start_time) + INTERVAL 30 DAY
+      `
+  );
+  await execClickhouseInitStep(
+    "add session replay metadata v2 source column",
+    `
+      ALTER TABLE session_replay_metadata_v2
+        ADD COLUMN IF NOT EXISTS replay_source SimpleAggregateFunction(anyLast, LowCardinality(String)) DEFAULT 'web'
       `
   );
   await ensureUtcTimeColumns("session_replay_metadata_v2", UTC_TIME_COLUMNS.session_replay_metadata_v2);

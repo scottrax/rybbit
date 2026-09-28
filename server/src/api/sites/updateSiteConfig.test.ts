@@ -253,15 +253,15 @@ describe("updateSiteConfig — request validation", () => {
     expect(reply.statusCode).toBe(404);
   });
 
-  it("rejects enabling session replay on a mobile site before the pro gate", async () => {
+  it("allows an entitled mobile site to persist session replay", async () => {
     state.site = makeSite({ type: "mobile", domain: "com.example.app" });
+    mocks.getSubscriptionInner.mockResolvedValue(subscription(true));
     const reply = replyStub();
 
     await updateSiteConfig(makeRequest({ sessionReplay: true }), reply);
 
-    expect(reply.statusCode).toBe(400);
-    expect(reply.body.error).toBe("Session replay and Web Vitals are only available for web sites");
-    expect(mocks.getSubscriptionInner).not.toHaveBeenCalled();
+    expect(reply.statusCode).toBe(200);
+    expect(state.updates[0]).toMatchObject({ sessionReplay: true });
   });
 
   it("rejects an empty update", async () => {
