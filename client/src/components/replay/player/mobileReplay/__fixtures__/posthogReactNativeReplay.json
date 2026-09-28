@@ -1,0 +1,64 @@
+[
+  {
+    "timestamp": 1725607643113,
+    "type": "4",
+    "data": { "width": 393, "height": 852 }
+  },
+  {
+    "timestamp": 1725607643113,
+    "type": "2",
+    "data": {
+      "initialOffset": { "left": 0, "top": 0 },
+      "wireframes": [
+        {
+          "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+          "height": 852,
+          "id": 4324378400,
+          "type": "screenshot",
+          "width": 393,
+          "x": 0,
+          "y": 0
+        }
+      ]
+    }
+  },
+  {
+    "timestamp": 1725607643213,
+    "type": "3",
+    "data": { "source": 2, "type": 7, "id": 0, "x": 120, "y": 240 }
+  },
+  {
+    "timestamp": 1725607643313,
+    "type": "3",
+    "data": {
+      "source": 0,
+      "updates": [
+        {
+          "parentId": 9876,
+          "wireframe": {
+            "base64": "data:image/webp;base64,UklGRg==",
+            "height": 852,
+            "id": 4324378400,
+            "type": "screenshot",
+            "width": 393,
+            "x": 0,
+            "y": 0
+          }
+        }
+      ]
+    }
+  },
+  {
+    "timestamp": 1725607643413,
+    "type": "5",
+    "data": {
+      "tag": "keyboard",
+      "payload": { "open": true, "height": 301 }
+    }
+  },
+  {
+    "timestamp": 1725607643513,
+    "type": "5",
+    "data": { "tag": "keyboard", "payload": { "open": false } }
+  }
+]
