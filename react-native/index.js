@@ -1,10 +1,23 @@
 "use strict";
 
-const SDK_VERSION = "0.1.1";
+const SDK_VERSION = "0.2.0";
 const DEFAULT_CONFIG_TIMEOUT_MS = 3000;
 const DEFAULT_MAX_QUEUE_SIZE = 100;
+const DEFAULT_REPLAY_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 
 let ReactNativeModule;
+try {
+  ReactNativeModule = require("react-native");
+} catch {
+  ReactNativeModule = null;
+}
+let SessionReplayPlugin;
+try {
+  SessionReplayPlugin = require("@posthog/react-native-plugin");
+  SessionReplayPlugin = SessionReplayPlugin.default || SessionReplayPlugin;
+} catch {
+  SessionReplayPlugin = null;
+}
 
 function getReactNative() {
   if (!ReactNativeModule) {
@@ -36,6 +49,33 @@ function generateId() {
   const randomPart = Math.random().toString(36).slice(2);
   const timePart = Date.now().toString(36);
   return `rn_${timePart}_${randomPart}`;
+}
+
+function generateUuid() {
+  const cryptoObject = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (typeof cryptoObject?.randomUUID === "function") return cryptoObject.randomUUID();
+
+  const bytes = new Uint8Array(16);
+  if (typeof cryptoObject?.getRandomValues === "function") {
+    cryptoObject.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex
+    .slice(8, 10)
+    .join("")}-${hex.slice(10).join("")}`;
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function isNativeReplayLinkingError(error) {
+  const message = String(error?.message || error || "");
+  return message.includes("doesn't seem to be linked") || message.includes("Expo Go");
 }
 
 function withTimeout(promise, timeoutMs) {
@@ -131,12 +171,38 @@ class RybbitReactNative {
     this.userId = null;
     this.queue = [];
     this.appStateSubscription = null;
+    this.replayPlugin = SessionReplayPlugin;
+    this.replaySessionId = null;
+    this.replayConfigured = false;
+    this.replayUnsupported = false;
+    this.replayLastBackgroundAt = null;
+    this.replayManuallyStopped = false;
+    this.replaySessionEnded = false;
+    this.replayControlVersion = 0;
+    this.lifecyclePromise = Promise.resolve();
+    this.identityPromise = Promise.resolve();
+    this.currentAppState = "unknown";
   }
 
   async init(config) {
     if (!config || !config.analyticsHost || !config.siteId) {
       throw new Error("analyticsHost and siteId are required");
     }
+
+    const replaySampleRate = config.sessionReplaySampleRate ?? 1;
+    if (typeof replaySampleRate !== "number" || !Number.isFinite(replaySampleRate) || replaySampleRate < 0 || replaySampleRate > 1) {
+      throw new Error("sessionReplaySampleRate must be a number between 0 and 1");
+    }
+    const replayThrottleDelayMs = config.sessionReplayThrottleDelayMs ?? 1000;
+    if (typeof replayThrottleDelayMs !== "number" || !Number.isFinite(replayThrottleDelayMs) || replayThrottleDelayMs < 0) {
+      throw new Error("sessionReplayThrottleDelayMs must be a finite non-negative number");
+    }
+    const replaySessionTimeoutMs = config.sessionReplaySessionTimeoutMs ?? DEFAULT_REPLAY_SESSION_TIMEOUT_MS;
+    if (typeof replaySessionTimeoutMs !== "number" || !Number.isFinite(replaySessionTimeoutMs) || replaySessionTimeoutMs < 0) {
+      throw new Error("sessionReplaySessionTimeoutMs must be a finite non-negative number");
+    }
+
+    await this.teardownSessionReplay();
 
     this.config = {
       analyticsHost: trimTrailingSlash(config.analyticsHost),
@@ -151,14 +217,22 @@ class RybbitReactNative {
       configTimeoutMs: config.configTimeoutMs || DEFAULT_CONFIG_TIMEOUT_MS,
       maxQueueSize: config.maxQueueSize || DEFAULT_MAX_QUEUE_SIZE,
       fetch: config.fetch || (typeof fetch === "function" ? fetch : undefined),
+      sessionReplaySampleRate: replaySampleRate,
+      sessionReplayMaskAllTextInputs: config.sessionReplayMaskAllTextInputs !== false,
+      sessionReplayMaskAllImages: config.sessionReplayMaskAllImages !== false,
+      sessionReplayMaskAllSandboxedViews: config.sessionReplayMaskAllSandboxedViews !== false,
+      sessionReplayCaptureTouches: config.sessionReplayCaptureTouches === true,
+      sessionReplayThrottleDelayMs: replayThrottleDelayMs,
+      sessionReplaySessionTimeoutMs: replaySessionTimeoutMs,
     };
     this.storage = config.storage || createMemoryStorage();
 
     this.anonymousId = await this.getOrCreateAnonymousId();
     this.userId = await this.storage.getItem(this.storageKey("user-id"));
     this.remoteConfig = await this.fetchRemoteConfig();
+    await this.setupSessionReplay();
 
-    if (this.config.autoTrackAppLifecycle) {
+    if (this.config.autoTrackAppLifecycle || this.replayConfigured) {
       this.setupAppLifecycleTracking();
     }
 
@@ -167,6 +241,25 @@ class RybbitReactNative {
     }
 
     await this.flush();
+  }
+
+  async teardownSessionReplay() {
+    this.appStateSubscription?.remove?.();
+    this.appStateSubscription = null;
+    await this.lifecyclePromise;
+    await this.identityPromise;
+    if (this.replayConfigured) {
+      await this.replayPlugin.stopRecording();
+      await this.replayPlugin.endSession();
+    }
+    this.replaySessionId = null;
+    this.replayConfigured = false;
+    this.replayUnsupported = false;
+    this.replayLastBackgroundAt = null;
+    this.replayManuallyStopped = false;
+    this.replaySessionEnded = false;
+    this.replayControlVersion = 0;
+    this.lifecyclePromise = Promise.resolve();
   }
 
   storageKey(name) {
@@ -181,6 +274,78 @@ class RybbitReactNative {
     const nextId = generateId();
     await this.storage.setItem(key, nextId);
     return nextId;
+  }
+
+  async getOrCreateReplaySessionId() {
+    const idKey = this.storageKey("replay-session-id");
+    const activityKey = this.storageKey("replay-last-activity-at");
+    const existingId = await this.storage.getItem(idKey);
+    const lastActivity = Number(await this.storage.getItem(activityKey));
+    const isCurrent =
+      isUuid(existingId) &&
+      Number.isFinite(lastActivity) &&
+      lastActivity > 0 &&
+      Date.now() - lastActivity <= this.config.sessionReplaySessionTimeoutMs;
+    const sessionId = isCurrent ? existingId : generateUuid();
+    await this.storage.setItem(idKey, sessionId);
+    await this.storage.setItem(activityKey, String(Date.now()));
+    return sessionId;
+  }
+
+  async setupSessionReplay() {
+    if (this.remoteConfig.sessionReplay !== true || this.config.sessionReplaySampleRate === 0) return;
+
+    this.replaySessionId = await this.getOrCreateReplaySessionId();
+    if (!this.replayPlugin) {
+      this.replayUnsupported = true;
+      this.debug("Native session replay is unavailable. Expo Go is not supported; use a development build.");
+      return;
+    }
+
+    try {
+      this.currentAppState = getReactNative().AppState?.currentState || "unknown";
+      await this.replayPlugin.setup(
+        this.replaySessionId,
+        {
+          apiKey: this.config.siteId,
+          projectToken: this.config.siteId,
+          host: this.config.analyticsHost,
+          debug: this.config.debug,
+          distinctId: this.userId || this.anonymousId,
+          anonymousId: this.anonymousId,
+          sdkVersion: SDK_VERSION,
+          preloadFeatureFlags: false,
+        },
+        {
+          sessionReplay: {
+            enabled: this.currentAppState === "active",
+            sdkReplayConfig: {
+              sampleRate: this.config.sessionReplaySampleRate,
+              maskAllTextInputs: this.config.sessionReplayMaskAllTextInputs,
+              maskAllImages: this.config.sessionReplayMaskAllImages,
+              maskAllSandboxedViews: this.config.sessionReplayMaskAllSandboxedViews,
+              captureTouches: this.config.sessionReplayCaptureTouches,
+              throttleDelayMs: this.config.sessionReplayThrottleDelayMs,
+              captureLog: false,
+              captureNetworkTelemetry: false,
+              screenshotModeBackgroundCapture: false,
+            },
+            decideReplayConfig: {
+              endpoint: `${this.config.analyticsHost}/session-replay/mobile/${this.config.siteId}`,
+            },
+          },
+        }
+      );
+      this.replayConfigured = true;
+      this.replaySessionEnded = false;
+    } catch (error) {
+      if (isNativeReplayLinkingError(error)) {
+        this.replayUnsupported = true;
+        this.debug("Native session replay is not supported in Expo Go. Use an Expo development build.", error);
+        return;
+      }
+      throw error;
+    }
   }
 
   async fetchRemoteConfig() {
@@ -203,25 +368,59 @@ class RybbitReactNative {
     try {
       const { AppState } = getReactNative();
       let previousState = AppState.currentState;
+      this.currentAppState = previousState;
 
-      if (previousState === "active") {
+      if (previousState === "active" && this.config.autoTrackAppLifecycle) {
         this.event("app_open").catch(error => this.debug("Failed to track app_open", error));
       }
 
       this.appStateSubscription?.remove?.();
       this.appStateSubscription = AppState.addEventListener("change", nextState => {
-        if (previousState !== "active" && nextState === "active") {
-          this.event("app_open").catch(error => this.debug("Failed to track app_open", error));
-        } else if (previousState === "active" && nextState !== "active") {
-          this.event("app_background", { state: nextState }).catch(error =>
-            this.debug("Failed to track app_background", error)
-          );
-        }
+        const priorState = previousState;
         previousState = nextState;
+        this.currentAppState = nextState;
+        const transition = () => this.handleAppStateChange(priorState, nextState);
+        this.lifecyclePromise = this.lifecyclePromise.then(transition, transition).catch(error => {
+          this.debug("Failed to handle AppState change", error);
+        });
       });
     } catch (error) {
       this.debug("Failed to setup AppState tracking", error);
     }
+  }
+
+  async handleAppStateChange(previousState, nextState) {
+    if (previousState !== "active" && nextState === "active") {
+      await this.resumeSessionReplay();
+      if (this.config.autoTrackAppLifecycle) await this.event("app_open");
+    } else if (previousState === "active" && nextState !== "active") {
+      await this.pauseSessionReplay();
+      if (this.config.autoTrackAppLifecycle) await this.event("app_background", { state: nextState });
+    }
+  }
+
+  async pauseSessionReplay() {
+    if (!this.replayConfigured) return;
+    this.replayLastBackgroundAt = Date.now();
+    await this.storage.setItem(this.storageKey("replay-last-activity-at"), String(this.replayLastBackgroundAt));
+    await this.replayPlugin.stopRecording();
+    await this.replayPlugin.endSession();
+    this.replaySessionEnded = true;
+  }
+
+  async resumeSessionReplay() {
+    if (!this.replayConfigured || this.replayManuallyStopped) return;
+    const elapsed = this.replayLastBackgroundAt === null ? 0 : Date.now() - this.replayLastBackgroundAt;
+    const resumeCurrent = elapsed <= this.config.sessionReplaySessionTimeoutMs;
+    if (!resumeCurrent) {
+      this.replaySessionId = generateUuid();
+      await this.storage.setItem(this.storageKey("replay-session-id"), this.replaySessionId);
+    }
+    await this.storage.setItem(this.storageKey("replay-last-activity-at"), String(Date.now()));
+    await this.replayPlugin.startSession(this.replaySessionId);
+    this.replaySessionEnded = false;
+    if (this.replayManuallyStopped) return;
+    await this.replayPlugin.startRecording(resumeCurrent);
   }
 
   createBasePayload(context) {
@@ -244,6 +443,7 @@ class RybbitReactNative {
     };
 
     if (this.userId) payload.user_id = this.userId;
+    if (this.replayConfigured && this.replaySessionId) payload.session_id = this.replaySessionId;
     if (this.config.tag) payload.tag = this.config.tag;
 
     return payload;
@@ -339,24 +539,41 @@ class RybbitReactNative {
     );
   }
 
+  enqueueIdentityOperation(operation) {
+    const result = this.identityPromise.then(operation, operation);
+    this.identityPromise = result.catch(error => {
+      this.debug("Failed to update identity", error);
+    });
+    return result;
+  }
+
   async identify(userId, traits) {
     this.ensureInitialized();
-    if (!userId || typeof userId !== "string") {
+    if (!userId || typeof userId !== "string" || !userId.trim()) {
       throw new Error("User ID must be a non-empty string");
     }
 
-    this.userId = userId.trim();
-    await this.storage.setItem(this.storageKey("user-id"), this.userId);
+    const nextUserId = userId.trim();
+    await this.enqueueIdentityOperation(async () => {
+      this.userId = nextUserId;
+      await this.storage.setItem(this.storageKey("user-id"), this.userId);
 
-    await this.sendIdentify(this.userId, traits, true);
+      if (this.replayConfigured) {
+        await this.replayPlugin.identify(this.userId, this.anonymousId);
+      }
+
+      await this.sendIdentify(this.userId, traits, true);
+    });
   }
 
   async setTraits(traits) {
     this.ensureInitialized();
-    if (!this.userId) {
-      throw new Error("Cannot set traits without identifying user first");
-    }
-    await this.sendIdentify(this.userId, traits || {}, false);
+    await this.enqueueIdentityOperation(async () => {
+      if (!this.userId) {
+        throw new Error("Cannot set traits without identifying user first");
+      }
+      await this.sendIdentify(this.userId, traits || {}, false);
+    });
   }
 
   async sendIdentify(userId, traits, isNewIdentify) {
@@ -388,12 +605,65 @@ class RybbitReactNative {
 
   async clearUserId() {
     this.ensureInitialized();
-    this.userId = null;
-    await this.storage.removeItem(this.storageKey("user-id"));
+    await this.enqueueIdentityOperation(async () => {
+      this.userId = null;
+      await this.storage.removeItem(this.storageKey("user-id"));
+      if (this.replayConfigured) {
+        await this.replayPlugin.reset(this.anonymousId, this.anonymousId);
+      }
+    });
   }
 
   getUserId() {
     return this.userId;
+  }
+
+  ensureSessionReplayAvailable() {
+    this.ensureInitialized();
+    if (this.replayUnsupported) {
+      throw new Error("Native session replay is not supported in Expo Go. Use an Expo development build or a native build.");
+    }
+    if (!this.replayConfigured) {
+      throw new Error("Session replay is not enabled for this site or its sample rate is 0");
+    }
+  }
+
+  enqueueLifecycleOperation(operation) {
+    const result = this.lifecyclePromise.then(operation, operation);
+    this.lifecyclePromise = result.catch(error => {
+      this.debug("Failed to update native session replay", error);
+    });
+    return result;
+  }
+
+  async startSessionReplay() {
+    this.ensureSessionReplayAvailable();
+    const operationVersion = ++this.replayControlVersion;
+    await this.enqueueLifecycleOperation(async () => {
+      if (operationVersion !== this.replayControlVersion) return;
+      this.replayManuallyStopped = false;
+      if (this.currentAppState !== "active") return;
+      if (this.replaySessionEnded) {
+        await this.replayPlugin.startSession(this.replaySessionId);
+        this.replaySessionEnded = false;
+      }
+      if (operationVersion !== this.replayControlVersion || this.replayManuallyStopped) return;
+      await this.replayPlugin.startRecording(true);
+    });
+  }
+
+  async stopSessionReplay() {
+    this.ensureSessionReplayAvailable();
+    this.replayControlVersion += 1;
+    this.replayManuallyStopped = true;
+    await this.enqueueLifecycleOperation(() => this.replayPlugin.stopRecording());
+  }
+
+  async isSessionReplayActive() {
+    this.ensureInitialized();
+    if (!this.replayConfigured) return false;
+    await this.lifecyclePromise;
+    return !!(await this.replayPlugin.isEnabled());
   }
 
   createNavigationTracker(options) {
@@ -425,6 +695,10 @@ class RybbitReactNative {
   cleanup() {
     this.appStateSubscription?.remove?.();
     this.appStateSubscription = null;
+    if (!this.replayConfigured) return Promise.resolve();
+    this.replayControlVersion += 1;
+    this.replayManuallyStopped = true;
+    return this.enqueueLifecycleOperation(() => this.pauseSessionReplay());
   }
 
   ensureInitialized() {

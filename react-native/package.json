@@ -1,20 +1,35 @@
 {
   "name": "@rybbit/react-native",
-  "version": "0.1.1",
-  "description": "React Native analytics SDK for Rybbit",
+  "version": "0.2.0",
+  "description": "React Native analytics and session replay SDK for Rybbit",
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
     "index.js",
     "index.d.ts",
+    "index.test.js",
     "README.md"
   ],
   "keywords": [
     "analytics",
     "react-native",
+    "session-replay",
     "rybbit"
   ],
+  "scripts": {
+    "test": "node --test index.test.js",
+    "test:run": "node --test index.test.js",
+    "typecheck": "tsc --noEmit --strict --skipLibCheck index.d.ts",
+    "lint": "node --check index.js && node --check index.test.js"
+  },
+  "dependencies": {
+    "@posthog/react-native-plugin": "2.12.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  },
   "peerDependencies": {
+    "react": "*",
     "react-native": ">=0.72.0"
   },
   "publishConfig": {

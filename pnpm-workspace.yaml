@@ -2,6 +2,7 @@ packages:
   - client
   - server
   - shared
+  - react-native
 
 # Preserve the existing npm installs' explicit peer dependencies.
 autoInstallPeers: false
