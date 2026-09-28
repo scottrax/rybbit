@@ -101,6 +101,25 @@ function replyStub() {
   return reply as unknown as FastifyReply & typeof reply;
 }
 
+describe("mobile replay route protection", () => {
+  it("rate-limits by site and IP before decompressing request bodies", () => {
+    const rateLimit = mobileSessionReplayRouteOptions.config?.rateLimit;
+    expect(rateLimit).toMatchObject({
+      hook: "onRequest",
+      max: 300,
+      timeWindow: "1 minute",
+      skipOnError: false,
+    });
+    expect(rateLimit).toBeTypeOf("object");
+    if (!rateLimit || typeof rateLimit.keyGenerator !== "function") {
+      throw new Error("mobile replay route is missing its rate-limit key generator");
+    }
+    expect(rateLimit.keyGenerator(requestFor(postHogBatch()))).toBe(
+      "mobile-replay:site_public_key:198.51.100.20",
+    );
+  });
+});
+
 describe("recordMobileSessionReplay", () => {
   beforeEach(() => {
     vi.clearAllMocks();

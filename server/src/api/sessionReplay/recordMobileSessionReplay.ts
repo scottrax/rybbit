@@ -47,6 +47,20 @@ function contentEncoding(request: FastifyRequest): string {
 
 export const mobileSessionReplayRouteOptions: RouteShorthandOptions = {
   bodyLimit: MOBILE_REPLAY_EXPANDED_LIMIT_BYTES,
+  config: {
+    rateLimit: {
+      // Run before body parsing/decompression. Site IDs are public, so bind the
+      // limit to both the site and source IP to avoid cross-site interference.
+      hook: "onRequest",
+      max: 300,
+      timeWindow: "1 minute",
+      skipOnError: false,
+      keyGenerator: request => {
+        const siteId = (request.params as { siteId?: string } | undefined)?.siteId || "unknown";
+        return `mobile-replay:${siteId}:${request.ip}`;
+      },
+    },
+  },
   preParsing: async (request, _reply, payload) => {
     const encoding = contentEncoding(request);
     if (encoding !== "identity" && encoding !== "gzip") {
