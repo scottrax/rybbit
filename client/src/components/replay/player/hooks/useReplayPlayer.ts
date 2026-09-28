@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import rrwebPlayer from "rrweb-player";
 import { useShallow } from "zustand/react/shallow";
 import { useReplayStore } from "../../replayStore";
+import { transformMobileReplayEvents } from "../mobileReplay/transformMobileReplayEvents";
 import { CONTROLS_HEIGHT } from "../utils/replayUtils";
 
 interface UseReplayPlayerProps {
@@ -38,11 +39,13 @@ export const useReplayPlayer = ({ data, width, height }: UseReplayPlayerProps) =
       let handleVisibilityChange: (() => void) | null = null;
 
       try {
+        const events = transformMobileReplayEvents(data.events);
+
         // Initialize rrweb player
         newPlayer = new rrwebPlayer({
           target: playerContainerRef.current,
           props: {
-            events: data.events as any, // Cast to any to handle type compatibility with rrweb
+            events: events as any, // Cast to any to handle type compatibility with rrweb
             width: widthRef.current,
             // subtract for the custom controls
             height: heightRef.current - CONTROLS_HEIGHT,

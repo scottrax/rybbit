@@ -18,6 +18,7 @@ async function buildCorsTestApp(env: NodeJS.ProcessEnv) {
   app.delete("/api/sites/:siteId", async () => ({ success: true }));
   app.get("/api/sites/:siteId/sessions", async () => ({ data: [] }));
   app.post("/api/track", async () => ({ success: true }));
+  app.post("/api/session-replay/mobile/:siteId", async () => ({ success: true }));
   app.post("/api/mcp", async () => ({ success: true }));
   app.get("/api/version", async () => ({ version: "0.0.0" }));
 
@@ -117,6 +118,31 @@ describe("CORS policy", () => {
       expect(actual.statusCode).toBe(200);
       expect(actual.headers["access-control-allow-origin"]).toBe("https://customer-site.example");
       expect(actual.headers["access-control-allow-credentials"]).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("allows React Native replay uploads and gzip preflights from arbitrary origins", async () => {
+    const app = await buildCorsTestApp({
+      NODE_ENV: "production",
+      BASE_URL: "https://rybbit.example.com",
+    });
+
+    try {
+      const preflight = await app.inject({
+        method: "OPTIONS",
+        url: "/api/session-replay/mobile/site_public_key",
+        headers: {
+          origin: "https://mobile-app.example",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "Content-Type,Content-Encoding",
+        },
+      });
+
+      expect(preflight.statusCode).toBe(204);
+      expect(preflight.headers["access-control-allow-origin"]).toBe("https://mobile-app.example");
+      expect(preflight.headers["access-control-allow-headers"]).toContain("Content-Encoding");
     } finally {
       await app.close();
     }
@@ -255,5 +281,4 @@ describe("trusted CORS origins", () => {
       })
     ).toEqual(["https://rybbit.example.com", "http://localhost:3002", "http://127.0.0.1:3002"]);
   });
-
 });

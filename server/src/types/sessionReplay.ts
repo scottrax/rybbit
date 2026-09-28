@@ -3,6 +3,7 @@ export interface SessionReplayEvent {
   sessionId: string;
   userId: string;
   identifiedUserId?: string;
+  replaySource?: string;
   timestamp: Date;
   eventType: string;
   eventData: string;
@@ -18,6 +19,7 @@ export interface SessionReplayMetadata {
   sessionId: string;
   userId: string;
   identifiedUserId?: string;
+  replaySource?: string;
   startTime: Date;
   endTime?: Date;
   durationMs?: number;
@@ -47,6 +49,9 @@ export interface SessionReplayMetadata {
 
 export interface RecordSessionReplayRequest {
   userId: string;
+  /** Validated client session ID used by native replay SDKs to correlate analytics. */
+  sessionId?: string;
+  replaySource?: "react-native";
   events: Array<{
     type: string | number;
     data: any;
@@ -57,14 +62,21 @@ export interface RecordSessionReplayRequest {
     viewportWidth?: number;
     viewportHeight?: number;
     language?: string;
+    decodedImageSizeBytes?: number;
   };
   apiKey?: string;
+}
+
+export interface MobileSessionReplayRequest extends RecordSessionReplayRequest {
+  sessionId: string;
+  replaySource: "react-native";
 }
 
 export interface SessionReplayListItem {
   sessionId: string;
   userId: string;
   identifiedUserId?: string;
+  replaySource?: string;
   startTime: Date;
   endTime?: Date;
   durationMs?: number;

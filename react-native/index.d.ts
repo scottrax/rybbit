@@ -19,6 +19,20 @@ export type RybbitConfig = {
   configTimeoutMs?: number;
   maxQueueSize?: number;
   fetch?: typeof fetch;
+  /** Replay sampling probability from 0 (disabled) to 1 (all eligible sessions). Default: 1. */
+  sessionReplaySampleRate?: number;
+  /** Masks text entered in native text-input controls. Default: true. */
+  sessionReplayMaskAllTextInputs?: boolean;
+  /** Masks native images. Default: true. */
+  sessionReplayMaskAllImages?: boolean;
+  /** Masks sandboxed/native embedded views on iOS. Default: true. */
+  sessionReplayMaskAllSandboxedViews?: boolean;
+  /** Captures touch indicators. Default: false. */
+  sessionReplayCaptureTouches?: boolean;
+  /** Minimum delay between replay screenshots in milliseconds. Default: 1000. */
+  sessionReplayThrottleDelayMs?: number;
+  /** Inactivity interval after which foregrounding creates a new replay session. Default: 30 minutes. */
+  sessionReplaySessionTimeoutMs?: number;
 };
 
 export type TrackContext = {
@@ -67,8 +81,11 @@ export class RybbitReactNative {
   clearUserId(): Promise<void>;
   getUserId(): string | null;
   flush(): Promise<void>;
+  startSessionReplay(): Promise<void>;
+  stopSessionReplay(): Promise<void>;
+  isSessionReplayActive(): Promise<boolean>;
   createNavigationTracker(options?: NavigationTrackerOptions): NavigationTracker;
-  cleanup(): void;
+  cleanup(): Promise<void>;
 }
 
 declare const rybbit: RybbitReactNative;

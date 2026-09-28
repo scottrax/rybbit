@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 const corsMethods = ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"];
 const corsAllowedHeaders = [
   "Content-Type",
+  "Content-Encoding",
   "Authorization",
   "X-Requested-With",
   "x-captcha-response",
@@ -98,6 +99,7 @@ export function isPublicCorsPath(path: string): boolean {
     path.startsWith("/.well-known/oauth-") ||
     path.startsWith("/.well-known/openid-configuration") ||
     path.startsWith("/api/session-replay/record/") ||
+    path.startsWith("/api/session-replay/mobile/") ||
     path.startsWith("/api/site/tracking-config/") ||
     /^\/api\/sites\/[^/]+\/sessions$/.test(path) ||
     /^\/api\/sites\/[^/]+\/embed-stats$/.test(path) ||

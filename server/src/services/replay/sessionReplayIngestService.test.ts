@@ -100,4 +100,20 @@ describe("SessionReplayIngestService identity", () => {
       siteId: 42,
     });
   });
+
+  it("preserves a validated client session ID for mobile replay correlation", async () => {
+    const service = new SessionReplayIngestService();
+    const request = {
+      ...replayRequest("mobile-user"),
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+      replaySource: "react-native" as const,
+    };
+
+    await service.recordEvents(42, request, requestMeta);
+
+    expect(mocks.updateSession).not.toHaveBeenCalled();
+    const insertedRows = mocks.insert.mock.calls.flatMap(call => call[0].values);
+    expect(new Set(insertedRows.map(row => row.session_id))).toEqual(new Set(["123e4567-e89b-42d3-a456-426614174000"]));
+    expect(new Set(insertedRows.map(row => row.replay_source))).toEqual(new Set(["react-native"]));
+  });
 });

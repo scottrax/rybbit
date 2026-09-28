@@ -19,10 +19,15 @@ Before installing the SDK, create a site for your app in the Rybbit dashboard:
 
 ```bash
 npm install @rybbit/react-native @react-native-async-storage/async-storage
+npx pod-install # iOS
 ```
 
 <Callout type="info">
 `@react-native-async-storage/async-storage` is recommended but not strictly required. The SDK accepts any storage adapter with `getItem`/`setItem`/`removeItem`. Without one, it falls back to in-memory storage and the anonymous visitor ID will not persist across app launches, so every launch counts as a new visitor.
+</Callout>
+
+<Callout type="warning">
+Native session replay requires the SDK's bundled native plugin and does not work in Expo Go. Use an Expo development build or a native React Native build, then rebuild after installation. Analytics still works in Expo Go; replay remains unavailable.
 </Callout>
 
 ## Initialization
@@ -50,6 +55,7 @@ await rybbit.init({
   appVersion: "1.4.2",
   storage: AsyncStorage,
   initialScreenName: "Home",
+  sessionReplaySampleRate: 1,
 });
 ```
 
@@ -78,17 +84,25 @@ await rybbit.init({
 | `configTimeoutMs`       | `number`        | `3000`      | Timeout in milliseconds for fetching remote tracking config during `init()`. On timeout or failure, the SDK proceeds with defaults.         |
 | `maxQueueSize`          | `number`        | `100`       | Maximum number of failed events kept in the in-memory retry queue. See [Offline Handling](#offline-handling-and-retries).                   |
 | `fetch`                 | `typeof fetch`  | global      | Custom `fetch` implementation. Defaults to the global `fetch`.                                                                              |
+| `sessionReplaySampleRate` | `number`       | `1`         | Native replay sampling probability from `0` (disabled) to `1` (all eligible sessions). Session Replay must also be enabled for the site.     |
+| `sessionReplayMaskAllTextInputs` | `boolean` | `true` | Mask text entered in native text-input controls. This does not mask every visible text label; see [Native Session Replay](#native-session-replay). |
+| `sessionReplayMaskAllImages` | `boolean`    | `true`      | Mask native images in replay screenshots.                                                                                                   |
+| `sessionReplayMaskAllSandboxedViews` | `boolean` | `true` | Mask sandboxed/native embedded views where supported (iOS).                                                                                |
+| `sessionReplayCaptureTouches` | `boolean`   | `false`     | Include touch indicators in replay.                                                                                                         |
+| `sessionReplayThrottleDelayMs` | `number`   | `1000`      | Minimum delay between replay screenshots in milliseconds.                                                                                   |
+| `sessionReplaySessionTimeoutMs` | `number`  | `1800000`   | Background inactivity interval after which foregrounding creates a new replay session.                                                      |
 
 #### Remote Configuration
 
-During `init()`, the SDK fetches your site's tracking settings from the dashboard. Two of them affect the React Native SDK:
+During `init()`, the SDK fetches your site's tracking settings from the dashboard. These settings affect the React Native SDK:
 
 | Dashboard Setting      | Effect                                                                       |
 | :--------------------- | :---------------------------------------------------------------------------- |
 | Track Initial Pageview | When disabled, the `initialScreenName` screen view is not tracked on init.    |
 | Capture Errors         | When disabled, calls to `rybbit.error()` are silently ignored.                |
+| Session Replay         | Enables native replay, subject to the local sample rate.                       |
 
-Web-only settings (session replay, Web Vitals, outbound links, autocapture) do not apply to mobile apps.
+Web Vitals, outbound links, and DOM autocapture remain web-only.
 
 ## Tracking Screens
 
@@ -242,6 +256,36 @@ await rybbit.clearUserId();
 `setTraits()` throws if no user has been identified yet — call `identify()` first.
 </Callout>
 
+## Native Session Replay
+
+Enable Session Replay for the site in Rybbit, then configure the local sample rate. The SDK uses native screenshot-mode replay and sends snapshots directly to your Rybbit API at `/session-replay/mobile/:siteId`.
+
+```tsx
+await rybbit.init({
+  analyticsHost: "https://app.rybbit.io/api",
+  siteId: "1",
+  storage: AsyncStorage,
+  sessionReplaySampleRate: 1,
+  sessionReplayMaskAllTextInputs: true,
+  sessionReplayMaskAllImages: true,
+  sessionReplayMaskAllSandboxedViews: true,
+  sessionReplayCaptureTouches: false,
+  sessionReplayThrottleDelayMs: 1000,
+});
+
+await rybbit.stopSessionReplay();
+await rybbit.startSessionReplay();
+const active = await rybbit.isSessionReplayActive();
+```
+
+Replay uses a persisted UUID session ID. The SDK attaches the same ID to analytics events so events and replay remain correlated. It also forwards `identify()` and `clearUserId()` changes to the native recorder.
+
+By default, native text inputs, images, and sandboxed views are masked, while touch indicators, log capture, and network telemetry are disabled. The pinned native plugin exposes `maskAllTextInputs`, but **does not expose a way to mask every visible text label**. Do not interpret this option as whole-screen text masking. Stop replay before showing sensitive customer, employee, payroll, location, or similar text outside an input.
+
+<Callout type="warning">
+`startSessionReplay()` resumes recording only when replay is enabled for the site and the local sample rate is greater than zero. In Expo Go it rejects with an explicit unsupported-environment error; use a development build.
+</Callout>
+
 ## App Lifecycle Events
 
 With `autoTrackAppLifecycle` enabled (the default), the SDK listens to React Native's `AppState` and tracks:
@@ -250,6 +294,8 @@ With `autoTrackAppLifecycle` enabled (the default), the SDK listens to React Nat
 - **`app_background`** — when the app leaves the foreground, with a `state` property (`"background"` or `"inactive"`).
 
 Set `autoTrackAppLifecycle: false` in `init()` to disable these events.
+
+When replay is configured, backgrounding also stops and closes the native recording so buffered snapshots can flush. Foregrounding within `sessionReplaySessionTimeoutMs` resumes the persisted replay session; after the timeout, it starts a new UUID session. An explicit `stopSessionReplay()` remains in effect across lifecycle transitions until `startSessionReplay()` is called.
 
 ## Offline Handling and Retries
 
@@ -282,15 +328,15 @@ Device locale, screen dimensions, and a platform-appropriate user agent (includi
 
 ## Cleanup
 
-Removes the `AppState` lifecycle listener. Call it if you tear down the SDK, e.g. in tests or when unmounting your app root.
+Removes the `AppState` lifecycle listener and stops/ends native replay. Call it if you tear down the SDK, e.g. in tests or when unmounting your app root.
 
 ```typescript
-rybbit.cleanup(): void;
+await rybbit.cleanup();
 ```
 
 ## Differences from the Web SDK
 
-- **Session replay** and **Web Vitals** are web-only and not available for React Native apps.
+- Native session replay uses platform screenshots rather than rrweb DOM events. Web Vitals remain web-only.
 - No automatic outbound link, button click, form, or copy tracking (there is no DOM).
 - Uncaught errors are not captured automatically — use `rybbit.error()` in your own error boundaries and catch blocks.
 - The anonymous visitor ID is generated by the SDK and persisted via your storage adapter, rather than derived from browser fingerprinting.

@@ -38,7 +38,7 @@ export class SessionReplayIngestService {
     request: RecordSessionReplayRequest,
     requestMeta?: RequestMetadata
   ): Promise<void> {
-    const { userId: clientUserId, events: rawEvents, metadata } = request;
+    const { userId: clientUserId, sessionId: clientSessionId, events: rawEvents, metadata } = request;
 
     // Device clocks, not ours. Correct the whole batch onto server time before
     // anything downstream partitions or TTLs on these values.
@@ -63,12 +63,17 @@ export class SessionReplayIngestService {
     // scopes session assignment so stored user identity semantics stay unchanged.
     const userId = deviceFingerprint;
 
-    // Get or create a session ID from the sessions service
-    const { sessionId } = await sessionsService.updateSession({
-      userId,
-      identifiedUserId,
-      siteId,
-    });
+    // Native replay SDKs share their UUID with analytics events. The public
+    // mobile endpoint validates that UUID before it reaches this service.
+    const sessionId = clientSessionId
+      ? clientSessionId
+      : (
+          await sessionsService.updateSession({
+            userId,
+            identifiedUserId,
+            siteId,
+          })
+        ).sessionId;
 
     // Check if R2 storage is enabled for cloud deployments
     let r2BatchKey: string | null = null;
@@ -98,6 +103,7 @@ export class SessionReplayIngestService {
           session_id: sessionId,
           user_id: userId,
           identified_user_id: identifiedUserId,
+          replay_source: request.replaySource || "web",
           timestamp: toClickHouseDateTime(event.timestamp),
           event_type: event.type,
           event_data: "", // Empty string when using R2
@@ -116,6 +122,7 @@ export class SessionReplayIngestService {
           session_id: sessionId,
           user_id: userId,
           identified_user_id: identifiedUserId,
+          replay_source: request.replaySource || "web",
           timestamp: toClickHouseDateTime(event.timestamp),
           event_type: event.type,
           event_data: serializedData,
@@ -159,6 +166,7 @@ export class SessionReplayIngestService {
         sessionId,
         userId,
         identifiedUserId,
+        request.replaySource || "web",
         metadata,
         batchStats,
         requestMeta
@@ -171,6 +179,7 @@ export class SessionReplayIngestService {
     sessionId: string,
     userId: string,
     identifiedUserId: string,
+    replaySource: string,
     metadata: any,
     batchStats: BatchStats,
     requestMeta?: RequestMetadata
@@ -209,6 +218,7 @@ export class SessionReplayIngestService {
           session_id: sessionId,
           user_id: userId,
           identified_user_id: identifiedUserId,
+          replay_source: replaySource,
           start_time: toClickHouseDateTime(batchStats.startTime),
           end_time: toClickHouseDateTime(batchStats.endTime),
           event_count: batchStats.eventCount,

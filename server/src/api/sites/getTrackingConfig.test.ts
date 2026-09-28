@@ -50,4 +50,27 @@ describe("getTrackingConfig", () => {
     expect(mocks.hasFeatureFlagsForRuntime).toHaveBeenCalledWith(123, "client");
     expect(reply.send).toHaveBeenCalledWith(expect.objectContaining({ featureFlagsEnabled: false }));
   });
+
+  it("returns explicitly enabled session replay for an entitled mobile site", async () => {
+    mocks.getConfig.mockResolvedValue({
+      siteId: 123,
+      type: "mobile",
+      sessionReplay: true,
+      webVitals: false,
+      trackErrors: false,
+      trackOutbound: true,
+      trackUrlParams: true,
+      trackInitialPageView: true,
+      trackSpaNavigation: true,
+      trackButtonClicks: false,
+      trackCopy: false,
+      trackFormInteractions: false,
+    });
+    const request = { params: { siteId: "123" }, log: { error: vi.fn() } } as any;
+    const reply = { send: vi.fn(), status: vi.fn().mockReturnThis() } as any;
+
+    await getTrackingConfig(request, reply);
+
+    expect(reply.send).toHaveBeenCalledWith(expect.objectContaining({ type: "mobile", sessionReplay: true }));
+  });
 });
